@@ -27,6 +27,7 @@ export interface GhosttyConfig {
   downloadCount: number;
   createdAt: string;
   updatedAt: string;
+  upstreamAddedAt: string | null;
 }
 
 export interface ParsedConfig {
@@ -56,7 +57,7 @@ export interface ConfigFormData {
   authorName?: string;
 }
 
-export type SortOption = "newest" | "popular" | "trending";
+export type SortOption = "newest" | "popular" | "trending" | "iterm2";
 
 export interface ConfigFilters {
   query?: string;

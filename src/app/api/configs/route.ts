@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
   const tag = searchParams.get("tag") || "";
   const isDark = searchParams.get("dark");
   const rawSort = searchParams.get("sort") || "popular";
-  const sort = ["popular", "newest", "trending"].includes(rawSort) ? rawSort : "popular";
+  const sort = ["popular", "newest", "trending", "iterm2"].includes(rawSort) ? rawSort : "popular";
   const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
 
   let dbQuery = supabase.from("configs").select("*", { count: "exact" });
@@ -52,6 +52,12 @@ export async function GET(request: NextRequest) {
       dbQuery = dbQuery
         .order("created_at", { ascending: false })
         .order("vote_count", { ascending: false });
+      break;
+    case "iterm2":
+      // iTerm2 upload order: oldest upstream scheme addition first
+      dbQuery = dbQuery
+        .order("upstream_added_at", { ascending: true, nullsFirst: false })
+        .order("title", { ascending: true });
       break;
     default:
       dbQuery = dbQuery.order("vote_count", { ascending: false });

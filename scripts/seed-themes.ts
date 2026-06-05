@@ -169,6 +169,71 @@ async function fetchThemeContent(filename: string): Promise<string | null> {
   }
 }
 
+/**
+ * Generate a slug that does not collide with an existing row. Distinct upstream
+ * themes can map to the same base slug (e.g. "Dracula" and "Dracula+" both ->
+ * "dracula"); in that case we append a numeric suffix, matching the upload API.
+ */
+async function uniqueSlug(base: string): Promise<string> {
+  for (let suffix = 0; suffix <= 100; suffix++) {
+    const candidate = suffix === 0 ? base : `${base}-${suffix}`;
+    const { data } = await supabase
+      .from("configs")
+      .select("id")
+      .eq("slug", candidate)
+      .maybeSingle();
+    if (!data) return candidate;
+  }
+  return `${base}-${Date.now()}`;
+}
+
+/**
+ * Resolve the original upstream upload time for a theme: the date of the first
+ * commit that added schemes/<name>.itermcolors (the canonical iTerm2 source).
+ * Falls back to the ghostty/ file, then null. Uses GITHUB_TOKEN when available
+ * (GitHub Actions provides one) to avoid the 60 req/hr anonymous limit.
+ */
+async function fetchSchemeFirstCommitDate(title: string): Promise<string | null> {
+  const token = process.env.GITHUB_TOKEN;
+  const headers: Record<string, string> = {
+    "User-Agent": "ghostty-style-seeder/1.0",
+    Accept: "application/vnd.github+json",
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  async function oldestForPath(path: string): Promise<string | null> {
+    const base = `https://api.github.com/repos/mbadolato/iTerm2-Color-Schemes/commits?path=${encodeURIComponent(
+      path
+    )}&per_page=1`;
+    try {
+      let res = await fetch(base, { headers });
+      if (!res.ok) return null;
+      const link = res.headers.get("link");
+      let page = 1;
+      if (link) {
+        const m = link.match(/[?&]page=(\d+)>;\s*rel="last"/);
+        if (m) page = parseInt(m[1], 10);
+      }
+      if (page > 1) {
+        res = await fetch(`${base}&page=${page}`, { headers });
+        if (!res.ok) return null;
+      }
+      const arr = (await res.json()) as Array<{
+        commit?: { committer?: { date?: string } };
+      }>;
+      if (!Array.isArray(arr) || arr.length === 0) return null;
+      return arr[0].commit?.committer?.date ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  return (
+    (await oldestForPath(`schemes/${title}.itermcolors`)) ??
+    (await oldestForPath(`ghostty/${title}`))
+  );
+}
+
 const FEATURED_SLUGS = new Set([
   "catppuccin-mocha",
   "dracula",
@@ -215,16 +280,17 @@ async function main() {
   let failed = 0;
 
   for (const themeName of themeNames) {
-    // Step 1: Generate slug early to check for existing before fetching content
+    // Step 1: Check for existing by upstream title (saves GitHub API calls).
+    // Matching by title (the unique upstream filename) instead of slug so that
+    // distinct themes whose slugs collide (e.g. "Dracula" vs "Dracula+") are
+    // not mistaken for one another.
     const title = themeName.trim();
-    const slug = generateSlug(title);
 
-    // Step 2: Check for existing (saves GitHub API calls)
     const { data: existing } = await supabase
       .from("configs")
       .select("id")
-      .eq("slug", slug)
-      .single();
+      .eq("title", title)
+      .maybeSingle();
 
     if (existing) {
       console.log(`  SKIP: ${title} (already exists)`);
@@ -255,10 +321,13 @@ async function main() {
 
     // Step 6: Insert
     const tags = autoTag(title, config);
+    const slug = await uniqueSlug(generateSlug(title));
+    const upstreamAddedAt = await fetchSchemeFirstCommitDate(title);
 
     const { error } = await supabase.from("configs").insert({
       slug,
       title,
+      upstream_added_at: upstreamAddedAt,
       description: null,
       raw_config: cleanedContent,
       background: config.background,

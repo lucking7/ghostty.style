@@ -32,5 +32,6 @@ export function mapRowToConfig(row: any): GhosttyConfig {
     downloadCount: row.download_count,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    upstreamAddedAt: row.upstream_added_at,
   };
 }

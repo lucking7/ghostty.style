@@ -178,6 +178,7 @@ export default function BrowseContent() {
             <SelectItem value="popular">Most Popular</SelectItem>
             <SelectItem value="newest">Newest</SelectItem>
             <SelectItem value="trending">Trending</SelectItem>
+            <SelectItem value="iterm2">iTerm2 Order</SelectItem>
           </SelectContent>
         </Select>
       </div>
