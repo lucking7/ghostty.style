@@ -42,7 +42,11 @@ export async function GET(request: NextRequest) {
 
   switch (sort) {
     case "newest":
-      dbQuery = dbQuery.order("created_at", { ascending: false });
+      // Newest by real upstream (iTerm2) upload date; community uploads with no
+      // upstream date fall back to their submission time via generated sort_date.
+      dbQuery = dbQuery
+        .order("sort_date", { ascending: false })
+        .order("title", { ascending: true });
       break;
     case "popular":
       dbQuery = dbQuery.order("vote_count", { ascending: false });
