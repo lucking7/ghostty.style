@@ -170,9 +170,50 @@ async function fetchThemeContent(filename: string): Promise<string | null> {
 }
 
 /**
+ * One-time renames for slugs produced before `+` mapped to `plus`.
+ * Idempotent: only updates when the old slug is still present.
+ */
+const SLUG_RENAMES: Array<{ title: string; from: string; to: string }> = [
+  { title: "Dracula+", from: "dracula-1", to: "dracula-plus" },
+  { title: "Dark+", from: "dark", to: "dark-plus" },
+];
+
+async function applySlugRenames(): Promise<void> {
+  for (const { title, from, to } of SLUG_RENAMES) {
+    const { data: row } = await supabase
+      .from("configs")
+      .select("id, slug")
+      .eq("title", title)
+      .eq("slug", from)
+      .maybeSingle();
+    if (!row) continue;
+
+    const { data: taken } = await supabase
+      .from("configs")
+      .select("id")
+      .eq("slug", to)
+      .maybeSingle();
+    if (taken) {
+      console.log(`  SKIP rename ${title}: target slug ${to} already taken`);
+      continue;
+    }
+
+    const { error } = await supabase
+      .from("configs")
+      .update({ slug: to })
+      .eq("id", row.id);
+    if (error) {
+      console.log(`  FAIL rename ${title}: ${from} -> ${to} — ${error.message}`);
+    } else {
+      console.log(`  RENAMED ${title}: ${from} -> ${to}`);
+    }
+  }
+}
+
+/**
  * Generate a slug that does not collide with an existing row. Distinct upstream
- * themes can map to the same base slug (e.g. "Dracula" and "Dracula+" both ->
- * "dracula"); in that case we append a numeric suffix, matching the upload API.
+ * themes can still collide after normalization; in that case we append a numeric
+ * suffix, matching the upload API. (`+` now maps to `plus`, so Dracula+ -> dracula-plus.)
  */
 async function uniqueSlug(base: string): Promise<string> {
   for (let suffix = 0; suffix <= 100; suffix++) {
@@ -265,6 +306,10 @@ async function main() {
     process.exit(1);
   }
   console.log("Supabase connection OK!\n");
+
+  console.log("Applying known slug renames (if needed)...");
+  await applySlugRenames();
+  console.log("");
 
   // Fetch all theme names from GitHub
   const themeNames = await fetchAllThemeNames();

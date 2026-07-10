@@ -1,0 +1,50 @@
+name: Fix plus slugs
+on:
+  workflow_dispatch: {}
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rename + theme slugs
+        env:
+          URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${URL:-}" ] || [ -z "${KEY:-}" ]; then
+            echo "Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY secret"
+            exit 1
+          fi
+          rename() {
+            local old="$1" new="$2"
+            echo "Renaming slug ${old} -> ${new}"
+            resp=$(curl -sS -w "\n%{http_code}" -X PATCH "${URL}/rest/v1/configs?slug=eq.${old}" \
+              -H "apikey: ${KEY}" \
+              -H "Authorization: Bearer ${KEY}" \
+              -H "Content-Type: application/json" \
+              -H "Prefer: return=representation" \
+              -d "{\"slug\":\"${new}\"}")
+            code=$(printf '%s\n' "$resp" | tail -n1)
+            body=$(printf '%s\n' "$resp" | sed '$d')
+            echo "HTTP ${code}"
+            echo "${body}"
+            if [ "$code" != "200" ]; then
+              echo "Unexpected status"
+              exit 1
+            fi
+            if [ "$body" = "[]" ]; then
+              echo "No row with slug=${old} (already fixed or missing)"
+              return 0
+            fi
+            echo "$body" | grep -q "\"slug\":\"${new}\"" || {
+              echo "Rename did not apply"
+              exit 1
+            }
+            echo "OK"
+          }
+          rename dracula-1 dracula-plus
+          rename dark dark-plus
+          echo "Verifying..."
+          curl -sS -H "apikey: ${KEY}" -H "Authorization: Bearer ${KEY}" \
+            "${URL}/rest/v1/configs?or=(title.eq.Dracula%2B,title.eq.Dark%2B)&select=title,slug"
+          echo

@@ -22,6 +22,20 @@ const nextConfig: NextConfig = withPlausibleProxy()({
       },
     ];
   },
+  async redirects() {
+    return [
+      {
+        source: "/config/dracula-1",
+        destination: "/config/dracula-plus",
+        permanent: true,
+      },
+      {
+        source: "/config/dark",
+        destination: "/config/dark-plus",
+        permanent: true,
+      },
+    ];
+  },
 });
 
 export default nextConfig;
