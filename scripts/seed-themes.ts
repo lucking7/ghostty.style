@@ -100,39 +100,50 @@ function autoTag(
   return [...new Set(tags)].slice(0, 5);
 }
 
+function githubHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    "User-Agent": "ghostty-style-seeder/1.0",
+    Accept: "application/vnd.github+json",
+  };
+  const token = process.env.GITHUB_TOKEN;
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
 /**
  * Fetch content using Node's https module — more reliable than Node's
  * built-in fetch for URL-encoded paths with spaces.
  */
-function httpsGet(url: string, maxRedirects = 5): Promise<string> {
+function httpsGet(
+  url: string,
+  maxRedirects = 5,
+  headers: Record<string, string> = { "User-Agent": "ghostty-style-seeder/1.0" }
+): Promise<string> {
   return new Promise((resolve, reject) => {
     if (maxRedirects <= 0) {
       reject(new Error("Too many redirects"));
       return;
     }
     https
-      .get(
-        url,
-        { headers: { "User-Agent": "ghostty-style-seeder/1.0" } },
-        (res) => {
-          // Follow redirects
-          if (
-            (res.statusCode === 301 || res.statusCode === 302) &&
-            res.headers.location
-          ) {
-            httpsGet(res.headers.location, maxRedirects - 1).then(resolve).catch(reject);
-            return;
-          }
-          if (res.statusCode !== 200) {
-            reject(new Error(`HTTP ${res.statusCode}`));
-            return;
-          }
-          let data = "";
-          res.on("data", (chunk: string) => (data += chunk));
-          res.on("end", () => resolve(data));
-          res.on("error", reject);
+      .get(url, { headers }, (res) => {
+        if (
+          (res.statusCode === 301 || res.statusCode === 302) &&
+          res.headers.location
+        ) {
+          httpsGet(res.headers.location, maxRedirects - 1, headers)
+            .then(resolve)
+            .catch(reject);
+          return;
         }
-      )
+        if (res.statusCode !== 200) {
+          reject(new Error(`HTTP ${res.statusCode}`));
+          return;
+        }
+        let data = "";
+        res.on("data", (chunk: string) => (data += chunk));
+        res.on("end", () => resolve(data));
+        res.on("error", reject);
+      })
       .on("error", reject);
   });
 }
@@ -146,7 +157,7 @@ async function fetchAllThemeNames(): Promise<string[]> {
 
   const url = "https://api.github.com/repos/mbadolato/iTerm2-Color-Schemes/contents/ghostty";
   try {
-    const raw = await httpsGet(url);
+    const raw = await httpsGet(url, 5, githubHeaders());
     const items = JSON.parse(raw) as { name: string; type: string }[];
     if (!Array.isArray(items)) {
       console.error("Unexpected API response (not an array)");
@@ -228,16 +239,6 @@ async function uniqueSlug(base: string): Promise<string> {
     if (!data) return candidate;
   }
   return `${base}-${Date.now()}`;
-}
-
-function githubHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {
-    "User-Agent": "ghostty-style-seeder/1.0",
-    Accept: "application/vnd.github+json",
-  };
-  const token = process.env.GITHUB_TOKEN;
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return headers;
 }
 
 /**
