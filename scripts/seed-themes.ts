@@ -301,6 +301,47 @@ async function fetchGhosttyLastCommitDates(
     console.log(
       `  commit page ${page}: resolved ${dates.size}/${wanted.size} themes`
     );
+
+    // Stop if this page was short (end of history)
+    if (commits.length < 100) break;
+  }
+
+  // Large auto-generate commits truncate `files` (>300), so many ghostty/
+  // paths are missed. Fill gaps with per-file last-commit lookups.
+  const missing = themeNames.filter((n) => !dates.has(n));
+  if (missing.length > 0) {
+    console.log(
+      `  Filling ${missing.length} gaps via per-file commits?path=ghostty/<name>...`
+    );
+    for (let i = 0; i < missing.length; i++) {
+      const name = missing[i];
+      const url = `https://api.github.com/repos/mbadolato/iTerm2-Color-Schemes/commits?path=${encodeURIComponent(
+        `ghostty/${name}`
+      )}&per_page=1`;
+      try {
+        const res = await fetch(url, { headers });
+        if (!res.ok) {
+          if (res.status === 403 || res.status === 429) {
+            console.warn(`  WARN: rate limited on ${name} (HTTP ${res.status})`);
+            break;
+          }
+          continue;
+        }
+        const arr = (await res.json()) as Array<{
+          commit?: { committer?: { date?: string }; author?: { date?: string } };
+        }>;
+        const date =
+          arr[0]?.commit?.committer?.date ?? arr[0]?.commit?.author?.date;
+        if (date) dates.set(name, date);
+      } catch {
+        // ignore single-file failures
+      }
+      if ((i + 1) % 50 === 0 || i + 1 === missing.length) {
+        console.log(
+          `  per-file ${i + 1}/${missing.length} (total resolved ${dates.size})`
+        );
+      }
+    }
   }
 
   console.log(
