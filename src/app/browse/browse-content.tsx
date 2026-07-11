@@ -176,9 +176,9 @@ export default function BrowseContent() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="popular">Most Popular</SelectItem>
-            <SelectItem value="newest">Newest</SelectItem>
+            <SelectItem value="newest">Newest (iTerm2)</SelectItem>
             <SelectItem value="trending">Trending</SelectItem>
-            <SelectItem value="iterm2">iTerm2 Order</SelectItem>
+            <SelectItem value="iterm2">iTerm2 Oldest</SelectItem>
           </SelectContent>
         </Select>
       </div>

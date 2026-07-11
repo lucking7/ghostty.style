@@ -5,7 +5,9 @@
  * The script dynamically fetches the full directory listing from the GitHub API,
  * so it will automatically pick up any new themes added to the repo.
  *
- * Existing themes (matched by slug) are skipped, making this safe to re-run.
+ * Existing themes (matched by title) are skipped for content insert, but their
+ * upstream_added_at is refreshed to the latest commit that touched
+ * ghostty/<name> so Newest sort tracks GitHub update order.
  *
  * Usage: npx tsx scripts/seed-themes.ts
  *
@@ -228,51 +230,83 @@ async function uniqueSlug(base: string): Promise<string> {
   return `${base}-${Date.now()}`;
 }
 
-/**
- * Resolve the original upstream upload time for a theme: the date of the first
- * commit that added schemes/<name>.itermcolors (the canonical iTerm2 source).
- * Falls back to the ghostty/ file, then null. Uses GITHUB_TOKEN when available
- * (GitHub Actions provides one) to avoid the 60 req/hr anonymous limit.
- */
-async function fetchSchemeFirstCommitDate(title: string): Promise<string | null> {
-  const token = process.env.GITHUB_TOKEN;
+function githubHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
     "User-Agent": "ghostty-style-seeder/1.0",
     Accept: "application/vnd.github+json",
   };
+  const token = process.env.GITHUB_TOKEN;
   if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
 
-  async function oldestForPath(path: string): Promise<string | null> {
-    const base = `https://api.github.com/repos/mbadolato/iTerm2-Color-Schemes/commits?path=${encodeURIComponent(
-      path
-    )}&per_page=1`;
-    try {
-      let res = await fetch(base, { headers });
-      if (!res.ok) return null;
-      const link = res.headers.get("link");
-      let page = 1;
-      if (link) {
-        const m = link.match(/[?&]page=(\d+)>;\s*rel="last"/);
-        if (m) page = parseInt(m[1], 10);
-      }
-      if (page > 1) {
-        res = await fetch(`${base}&page=${page}`, { headers });
-        if (!res.ok) return null;
-      }
-      const arr = (await res.json()) as Array<{
-        commit?: { committer?: { date?: string } };
-      }>;
-      if (!Array.isArray(arr) || arr.length === 0) return null;
-      return arr[0].commit?.committer?.date ?? null;
-    } catch {
-      return null;
+/**
+ * Last commit date for every ghostty/<name> file, matching
+ * https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/ghostty
+ * update order (newest commit first). Walks commits that touch ghostty/ and
+ * records the first time each file is seen (= most recent change).
+ */
+async function fetchGhosttyLastCommitDates(
+  themeNames: string[]
+): Promise<Map<string, string>> {
+  const wanted = new Set(themeNames);
+  const dates = new Map<string, string>();
+  const headers = githubHeaders();
+  const maxPages = 100;
+
+  console.log(
+    `Resolving last-updated dates for ${wanted.size} ghostty/ themes via commit history...`
+  );
+
+  for (let page = 1; page <= maxPages && dates.size < wanted.size; page++) {
+    const listUrl = `https://api.github.com/repos/mbadolato/iTerm2-Color-Schemes/commits?path=ghostty&per_page=100&page=${page}`;
+    const listRes = await fetch(listUrl, { headers });
+    if (!listRes.ok) {
+      console.warn(
+        `  WARN: commits list page ${page} failed: HTTP ${listRes.status}`
+      );
+      break;
     }
+    const commits = (await listRes.json()) as Array<{
+      sha: string;
+      commit?: { committer?: { date?: string }; author?: { date?: string } };
+    }>;
+    if (!Array.isArray(commits) || commits.length === 0) break;
+
+    for (const c of commits) {
+      const date =
+        c.commit?.committer?.date ?? c.commit?.author?.date ?? null;
+      if (!date || !c.sha) continue;
+
+      const detailRes = await fetch(
+        `https://api.github.com/repos/mbadolato/iTerm2-Color-Schemes/commits/${c.sha}`,
+        { headers }
+      );
+      if (!detailRes.ok) continue;
+      const detail = (await detailRes.json()) as {
+        files?: Array<{ filename?: string }>;
+      };
+      for (const f of detail.files ?? []) {
+        const filename = f.filename ?? "";
+        if (!filename.startsWith("ghostty/")) continue;
+        const name = filename.slice("ghostty/".length);
+        if (!name || name.includes("/")) continue;
+        if (wanted.has(name) && !dates.has(name)) {
+          dates.set(name, date);
+        }
+      }
+      if (dates.size >= wanted.size) break;
+    }
+
+    console.log(
+      `  commit page ${page}: resolved ${dates.size}/${wanted.size} themes`
+    );
   }
 
-  return (
-    (await oldestForPath(`schemes/${title}.itermcolors`)) ??
-    (await oldestForPath(`ghostty/${title}`))
+  console.log(
+    `Last-updated dates resolved for ${dates.size}/${wanted.size} themes.\n`
   );
+  return dates;
 }
 
 const FEATURED_SLUGS = new Set([
@@ -318,32 +352,49 @@ async function main() {
     process.exit(1);
   }
 
+  const lastUpdated = await fetchGhosttyLastCommitDates(themeNames);
+
   console.log(`Seeding ghostty.style with up to ${themeNames.length} themes...\n`);
 
   let seeded = 0;
   let skipped = 0;
   let failed = 0;
+  let datesUpdated = 0;
 
   for (const themeName of themeNames) {
-    // Step 1: Check for existing by upstream title (saves GitHub API calls).
-    // Matching by title (the unique upstream filename) instead of slug so that
-    // distinct themes whose slugs collide (e.g. "Dracula" vs "Dracula+") are
-    // not mistaken for one another.
+    // Match by title (unique upstream filename) so Dracula / Dracula+ stay distinct.
     const title = themeName.trim();
+    const upstreamUpdatedAt = lastUpdated.get(themeName) ?? lastUpdated.get(title) ?? null;
 
     const { data: existing } = await supabase
       .from("configs")
-      .select("id")
+      .select("id, upstream_added_at")
       .eq("title", title)
       .maybeSingle();
 
     if (existing) {
-      console.log(`  SKIP: ${title} (already exists)`);
+      if (
+        upstreamUpdatedAt &&
+        existing.upstream_added_at !== upstreamUpdatedAt
+      ) {
+        const { error: upErr } = await supabase
+          .from("configs")
+          .update({ upstream_added_at: upstreamUpdatedAt })
+          .eq("id", existing.id);
+        if (upErr) {
+          console.log(`  FAIL date ${title}: ${upErr.message}`);
+          failed++;
+        } else {
+          datesUpdated++;
+          console.log(`  DATE: ${title} -> ${upstreamUpdatedAt}`);
+        }
+      } else {
+        console.log(`  SKIP: ${title} (already exists)`);
+      }
       skipped++;
       continue;
     }
 
-    // Step 3: Fetch from GitHub
     const content = await fetchThemeContent(themeName);
     if (!content) {
       console.log(`  SKIP: ${themeName} (not found in repo)`);
@@ -351,28 +402,21 @@ async function main() {
       continue;
     }
 
-    // Step 4: Clean inline comments before parsing
     const cleanedContent = cleanRawConfig(content);
-
-    // Step 5: Parse config
     const { config, errors } = parseGhosttyConfig(cleanedContent);
     if (errors.length > 3) {
-      console.log(
-        `  SKIP: ${themeName} (${errors.length} parse errors)`
-      );
+      console.log(`  SKIP: ${themeName} (${errors.length} parse errors)`);
       skipped++;
       continue;
     }
 
-    // Step 6: Insert
     const tags = autoTag(title, config);
     const slug = await uniqueSlug(generateSlug(title));
-    const upstreamAddedAt = await fetchSchemeFirstCommitDate(title);
 
     const { error } = await supabase.from("configs").insert({
       slug,
       title,
-      upstream_added_at: upstreamAddedAt,
+      upstream_added_at: upstreamUpdatedAt,
       description: null,
       raw_config: cleanedContent,
       background: config.background,
@@ -398,16 +442,20 @@ async function main() {
       console.log(`  FAIL: ${title} — ${error.message}`);
       failed++;
     } else {
-      console.log(`  OK:   ${title} (${slug}) [${tags.join(", ")}]`);
+      console.log(
+        `  OK:   ${title} (${slug}) [${tags.join(", ")}]${
+          upstreamUpdatedAt ? ` @ ${upstreamUpdatedAt}` : ""
+        }`
+      );
       seeded++;
     }
 
-    // Small delay to be nice to GitHub
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 50));
   }
 
   console.log(
-    `\n${"=".repeat(50)}\nDone! Seeded: ${seeded}, Skipped: ${skipped}, Failed: ${failed}\n` +
+    `\n${"=".repeat(50)}\nDone! Seeded: ${seeded}, Skipped: ${skipped}, ` +
+      `Dates updated: ${datesUpdated}, Failed: ${failed}\n` +
       `Total themes in directory: ${themeNames.length}\n`
   );
 }

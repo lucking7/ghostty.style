@@ -42,10 +42,10 @@ export async function GET(request: NextRequest) {
 
   switch (sort) {
     case "newest":
-      // Newest by real upstream (iTerm2) upload date; community uploads with no
-      // upstream date fall back to their submission time via generated sort_date.
+      // Pure iTerm2 ghostty/ last-commit order (newest change first).
+      // Community uploads without upstream date sink to the end.
       dbQuery = dbQuery
-        .order("sort_date", { ascending: false })
+        .order("upstream_added_at", { ascending: false, nullsFirst: false })
         .order("title", { ascending: true });
       break;
     case "popular":
@@ -58,7 +58,7 @@ export async function GET(request: NextRequest) {
         .order("vote_count", { ascending: false });
       break;
     case "iterm2":
-      // iTerm2 upload order: oldest upstream scheme addition first
+      // Reverse of Newest: oldest ghostty/ last-commit first
       dbQuery = dbQuery
         .order("upstream_added_at", { ascending: true, nullsFirst: false })
         .order("title", { ascending: true });
