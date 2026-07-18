@@ -171,13 +171,13 @@ export default function BrowseContent() {
           )}
         </Button>
         <Select value={sort} onValueChange={(v) => { setSort(v as SortOption); setPage(1); }}>
-          <SelectTrigger className="w-36">
+          <SelectTrigger className="w-full sm:w-44" aria-label="Sort themes">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="popular">Most Popular</SelectItem>
-            <SelectItem value="newest">Newest (iTerm2)</SelectItem>
             <SelectItem value="trending">Trending</SelectItem>
+            <SelectItem value="newest">iTerm2 Newest</SelectItem>
             <SelectItem value="iterm2">iTerm2 Oldest</SelectItem>
           </SelectContent>
         </Select>
